@@ -554,6 +554,12 @@ pub enum Commands {
         after_long_help = ""
     )]
     Workspace(WorkspaceNamespace),
+    /// Apply patches to packages in a uv workspace.
+    #[command(
+        after_help = "Use `uv help patch` for more details.",
+        after_long_help = ""
+    )]
+    Patch(PatchNamespace),
     /// The implementation of the build backend.
     ///
     /// These commands are not directly exposed to the user, instead users invoke their build
@@ -8412,6 +8418,46 @@ pub struct WorkspaceListArgs {
     /// List all standalone scripts with inline metadata in the workspace.
     #[arg(long)]
     pub scripts: bool,
+}
+
+#[derive(Args)]
+pub struct PatchNamespace {
+    #[command(subcommand)]
+    pub command: PatchCommand,
+}
+
+#[derive(Subcommand)]
+pub enum PatchCommand {
+    /// Apply the patches described in a patch manifest.
+    ///
+    /// The manifest is a JSON file with the same fields as the `patches.yml` schema used by
+    /// Zephyr's `west patch` command, with the `module` field renamed to `package`. Each patch's
+    /// `package` field must name a member of the current uv workspace; the patch's
+    /// `apply-command` (`git apply` by default) is run with that member's root directory as the
+    /// working directory.
+    ///
+    /// After a successful run, the set of applied patches is recorded in the workspace's virtual
+    /// environment (by default, `.venv/uv-patches.json`; see `UV_PROJECT_ENVIRONMENT`), which
+    /// `uv patch show` and `uv patch reset` read. On a subsequent run, a patch whose `sha256sum`
+    /// matches its recorded value is skipped with a warning instead of being re-applied.
+    Apply(PatchApplyArgs),
+    /// Show the patches that were applied during the last successful `uv patch apply` run.
+    ///
+    /// Reads the applied-patch state recorded in the workspace's virtual environment, so no
+    /// manifest needs to be specified.
+    Show,
+    /// Revert every patch recorded as applied in the workspace's virtual environment.
+    ///
+    /// Patches are reverted in the opposite order they were applied, by re-running each patch's
+    /// `apply-command` with `-R` appended against the patch file recorded at apply time.
+    Reset,
+}
+
+#[derive(Args, Debug)]
+pub struct PatchApplyArgs {
+    /// The path to the patch manifest.
+    #[arg(short, long, value_hint = ValueHint::FilePath)]
+    pub file: PathBuf,
 }
 
 /// See [PEP 517](https://peps.python.org/pep-0517/) and

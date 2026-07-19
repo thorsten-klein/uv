@@ -28,9 +28,9 @@ use uv_cache_info::Timestamp;
 use uv_cli::SelfUpdateArgs;
 use uv_cli::{
     AuthCommand, AuthHelperCommand, AuthNamespace, BuildBackendCommand, CacheCommand,
-    CacheNamespace, Cli, Commands, PipCommand, PipNamespace, ProjectCommand, PythonCommand,
-    PythonNamespace, SelfCommand, SelfNamespace, ToolCommand, ToolNamespace, TopLevelArgs,
-    WorkspaceCommand, WorkspaceNamespace, compat::CompatArgs,
+    CacheNamespace, Cli, Commands, PatchCommand, PatchNamespace, PipCommand, PipNamespace,
+    ProjectCommand, PythonCommand, PythonNamespace, SelfCommand, SelfNamespace, ToolCommand,
+    ToolNamespace, TopLevelArgs, WorkspaceCommand, WorkspaceNamespace, compat::CompatArgs,
 };
 use uv_client::BaseClientBuilder;
 use uv_configuration::min_stack_size;
@@ -2105,6 +2105,18 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
                     globals.preview,
                 )
                 .await
+            }
+        },
+        Commands::Patch(PatchNamespace { command }) => match command {
+            PatchCommand::Apply(args) => {
+                commands::patch_apply(args.file, &project_dir, &cache, &workspace_cache, printer)
+                    .await
+            }
+            PatchCommand::Show => {
+                commands::patch_show(&project_dir, &cache, &workspace_cache, printer).await
+            }
+            PatchCommand::Reset => {
+                commands::patch_reset(&project_dir, &cache, &workspace_cache, printer).await
             }
         },
         Commands::BuildBackend { command } => spawn_blocking(move || match command {

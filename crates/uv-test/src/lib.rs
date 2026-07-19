@@ -1401,6 +1401,30 @@ impl TestContext {
         command
     }
 
+    /// Create a `uv patch apply` command with options shared across scenarios.
+    pub fn patch_apply(&self) -> Command {
+        let mut command = self.new_command();
+        command.arg("patch").arg("apply");
+        self.add_shared_options(&mut command, false);
+        command
+    }
+
+    /// Create a `uv patch show` command with options shared across scenarios.
+    pub fn patch_show(&self) -> Command {
+        let mut command = self.new_command();
+        command.arg("patch").arg("show");
+        self.add_shared_options(&mut command, false);
+        command
+    }
+
+    /// Create a `uv patch reset` command with options shared across scenarios.
+    pub fn patch_reset(&self) -> Command {
+        let mut command = self.new_command();
+        command.arg("patch").arg("reset");
+        self.add_shared_options(&mut command, false);
+        command
+    }
+
     /// Create a `uv export` command with options shared across scenarios.
     pub fn export(&self) -> Command {
         let mut command = self.new_command();
