@@ -3,6 +3,7 @@ use std::path::PathBuf;
 
 use itertools::Itertools;
 use owo_colors::OwoColorize;
+use rustc_hash::FxHashSet;
 use thiserror::Error;
 use tracing::{Level, debug, enabled, warn};
 
@@ -20,12 +21,13 @@ use uv_dispatch::{BuildDispatch, SharedState};
 use uv_distribution::LoweredExtraBuildDependencies;
 use uv_distribution_types::{
     ConfigSettings, DependencyMetadata, ExtraBuildVariables, Index, IndexLocations, Name,
-    NameRequirementSpecification, Origin, PackageConfigSettings, Requirement, Resolution,
+    NameRequirementSpecification, Origin, PackageConfigSettings, Requirement, RequirementSource,
+    Resolution, UnresolvedRequirement,
 };
-use uv_fs::Simplified;
+use uv_fs::{LockedFileMode, Simplified};
 use uv_install_wheel::LinkMode;
 use uv_installer::{InstallationStrategy, SatisfiesResult, SitePackages};
-use uv_normalize::{DefaultExtras, DefaultGroups};
+use uv_normalize::{DefaultExtras, DefaultGroups, PackageName};
 use uv_pep440::Version;
 use uv_preview::{Preview, PreviewFeature};
 use uv_pypi_types::Conflicts;
@@ -33,7 +35,9 @@ use uv_python::{
     EnvironmentPreference, Prefix, PythonDownloads, PythonEnvironment, PythonInstallation,
     PythonPreference, PythonRequest, PythonVersion, Target,
 };
-use uv_requirements::{GroupsSpecification, RequirementsSource, RequirementsSpecification};
+use uv_requirements::{
+    GroupsSpecification, RequirementsHistory, RequirementsSource, RequirementsSpecification,
+};
 use uv_resolver::{
     DependencyMode, ExcludeNewer, FlatIndex, OptionsBuilder, Prerelease, PythonRequirement,
     ResolutionMode, ResolverEnvironment,
@@ -130,6 +134,7 @@ pub(crate) async fn pip_install(
     cache: Cache,
     workspace_cache: WorkspaceCache,
     dry_run: DryRun,
+    amend: bool,
     printer: Printer,
     preview: Preview,
 ) -> anyhow::Result<ExitStatus> {
@@ -167,6 +172,21 @@ pub(crate) async fn pip_install(
     )
     .await?;
 
+    // Save this install's own version-range requirements, for `--amend`. Must happen before
+    // `requirements` is moved into `operations::resolve` below. We skip URL/path/Git
+    // requirements since they have no version range to save.
+    let history_requirements: Vec<Requirement> = requirements
+        .iter()
+        .filter_map(|entry| match &entry.requirement {
+            UnresolvedRequirement::Named(requirement)
+                if matches!(requirement.source, RequirementSource::Registry { .. }) =>
+            {
+                Some(requirement.clone())
+            }
+            _ => None,
+        })
+        .collect();
+
     override_dependencies.extend(overrides_from_workspace);
 
     let hash_checking = HashCheckingMode::from_requirements_txt(hash_checking, require_hashes);
@@ -180,7 +200,7 @@ pub(crate) async fn pip_install(
         }
     }
 
-    let constraints: Vec<NameRequirementSpecification> = constraints
+    let mut constraints: Vec<NameRequirementSpecification> = constraints
         .iter()
         .cloned()
         .chain(
@@ -298,6 +318,31 @@ pub(crate) async fn pip_install(
         })
         .ok();
 
+    // With `--amend`, load past requirements and add them as constraints, so a real conflict
+    // fails loudly here instead of silently changing a version.
+    //
+    // Must go into `constraints`, not `requirements`: an active `--override` fully replaces a
+    // matching requirement (see `uv_configuration::Overrides::apply_requirement`), but
+    // constraints are kept separately and always checked. This is also why `--constraint`
+    // files already win over `--override` today.
+    if amend {
+        // `--upgrade-package <pkg>` always clears that package's saved requirement.
+        // Plain `--upgrade` only clears packages also named on this command line, so it
+        // doesn't wipe history for packages you didn't touch.
+        let mut skip: FxHashSet<PackageName> = upgrade.packages().cloned().unwrap_or_default();
+        if upgrade.is_all() {
+            skip.extend(history_requirements.iter().map(|req| req.name.clone()));
+        }
+
+        let history = {
+            let _lock =
+                RequirementsHistory::acquire_lock(environment.root(), LockedFileMode::Shared)
+                    .await?;
+            RequirementsHistory::read(environment.root())?
+        };
+        constraints.extend(history.active_constraints(&skip)?);
+    }
+
     // Determine the markers and tags to use for the resolution.
     let interpreter = environment.interpreter();
     let marker_env = resolution_markers(
@@ -377,6 +422,8 @@ pub(crate) async fn pip_install(
                         printer,
                     )?;
                 }
+
+                record_requirements_history(&environment, &history_requirements, dry_run).await?;
 
                 return Ok(ExitStatus::Success);
             }
@@ -695,6 +742,8 @@ pub(crate) async fn pip_install(
         }
     }
 
+    record_requirements_history(&environment, &history_requirements, dry_run).await?;
+
     // Notify the user of any resolution diagnostics.
     operations::diagnose_resolution(resolution.diagnostics(), printer)?;
 
@@ -711,4 +760,24 @@ pub(crate) async fn pip_install(
     }
 
     Ok(ExitStatus::Success)
+}
+
+/// Save this install's requirements to the venv's history file, with or without `--amend`, so
+/// a later `--amend` install can use them. Does nothing for `--dry-run`, since nothing is
+/// actually installed.
+async fn record_requirements_history(
+    environment: &PythonEnvironment,
+    history_requirements: &[Requirement],
+    dry_run: DryRun,
+) -> anyhow::Result<()> {
+    if dry_run.enabled() {
+        return Ok(());
+    }
+    let lock =
+        RequirementsHistory::acquire_lock(environment.root(), LockedFileMode::Exclusive).await?;
+    let mut history = RequirementsHistory::read(environment.root())?;
+    history.record(history_requirements, std::env::args().skip(1).collect());
+    history.write(environment.root())?;
+    drop(lock);
+    Ok(())
 }

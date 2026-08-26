@@ -3658,6 +3658,7 @@ pub(crate) struct PipInstallSettings {
     pub(crate) excludes: Vec<PathBuf>,
     pub(crate) build_constraints: Vec<PathBuf>,
     pub(crate) dry_run: DryRun,
+    pub(crate) amend: bool,
     pub(crate) constraints_from_workspace: Vec<Requirement>,
     pub(crate) overrides_from_workspace: Vec<Override<Requirement>>,
     pub(crate) excludes_from_workspace: Vec<ExcludeDependency>,
@@ -3717,6 +3718,7 @@ impl PipInstallSettings {
             strict,
             no_strict,
             dry_run,
+            amend,
             torch_backend,
             compat_args: _,
         } = args;
@@ -3781,6 +3783,7 @@ impl PipInstallSettings {
                 .filter_map(Maybe::into_option)
                 .collect(),
             dry_run: DryRun::from_args(dry_run),
+            amend,
             constraints_from_workspace,
             overrides_from_workspace,
             excludes_from_workspace,

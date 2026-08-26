@@ -2537,6 +2537,16 @@ pub struct PipInstallArgs {
     #[arg(long)]
     pub dry_run: bool,
 
+    /// Remember this install's requirements, and check future `--amend` installs against them.
+    ///
+    /// If a later requirement conflicts with an older one, uv fails instead of quietly
+    /// switching versions. Requirements are saved in a `uv-requirements-history.toml` file
+    /// inside the virtual environment.
+    ///
+    /// Use `--upgrade` or `--upgrade-package` to change a saved requirement on purpose.
+    #[arg(long)]
+    pub amend: bool,
+
     /// The backend to use when fetching packages in the PyTorch ecosystem (e.g., `cpu`, `cu126`, or `auto`)
     ///
     /// When set, uv will ignore the configured index URLs for packages in the PyTorch ecosystem,

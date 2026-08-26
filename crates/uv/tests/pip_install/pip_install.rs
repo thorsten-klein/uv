@@ -1550,6 +1550,236 @@ fn reinstall_incomplete() -> Result<()> {
     Ok(())
 }
 
+/// `--amend` should remember a requirement, so a later install without a version still
+/// respects it.
+#[test]
+fn amend_round_trip() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    let requirements_txt = context.temp_dir.child("requirements.txt");
+    requirements_txt.write_str("anyio<4")?;
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("-r")
+        .arg("requirements.txt")
+        .arg("--amend")
+        .arg("--strict"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    Prepared 3 packages in [TIME]
+    Installed 3 packages in [TIME]
+     + anyio==3.7.1
+     + idna==3.6
+     + sniffio==1.3.1
+    ");
+
+    // The requirements history should remember the `anyio<4` requirement.
+    let history = context.venv.child("uv-requirements-history.toml");
+    history.assert(predicate::str::contains("anyio"));
+    history.assert(predicate::str::contains("<4"));
+
+    // Re-install with no explicit specifier for `anyio`. `--amend` should still enforce `<4`.
+    let requirements_txt = context.temp_dir.child("requirements.txt");
+    requirements_txt.write_str("anyio")?;
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("-r")
+        .arg("requirements.txt")
+        .arg("--amend")
+        .arg("--strict"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Checked 1 package in [TIME]
+    ");
+
+    Ok(())
+}
+
+/// `--amend` should fail when a new requirement conflicts with a saved one, instead of
+/// silently switching versions.
+#[test]
+fn amend_contradiction_errors() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    let requirements_txt = context.temp_dir.child("requirements.txt");
+    requirements_txt.write_str("anyio<4")?;
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("-r")
+        .arg("requirements.txt")
+        .arg("--amend")
+        .arg("--strict"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    Prepared 3 packages in [TIME]
+    Installed 3 packages in [TIME]
+     + anyio==3.7.1
+     + idna==3.6
+     + sniffio==1.3.1
+    ");
+
+    let requirements_txt = context.temp_dir.child("requirements.txt");
+    requirements_txt.write_str("anyio>=4")?;
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("-r")
+        .arg("requirements.txt")
+        .arg("--amend")
+        .arg("--strict"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+      × No solution found when resolving dependencies:
+      ╰─▶ Because you require anyio>=4 and anyio<4, we can conclude that your requirements are unsatisfiable.
+    ");
+
+    Ok(())
+}
+
+/// `--upgrade-package` should clear a package's saved `--amend` requirement, so a new version
+/// can replace it instead of conflicting.
+#[test]
+fn amend_upgrade_package_clears_history() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    let requirements_txt = context.temp_dir.child("requirements.txt");
+    requirements_txt.write_str("anyio<4")?;
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("-r")
+        .arg("requirements.txt")
+        .arg("--amend")
+        .arg("--strict"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    Prepared 3 packages in [TIME]
+    Installed 3 packages in [TIME]
+     + anyio==3.7.1
+     + idna==3.6
+     + sniffio==1.3.1
+    ");
+
+    let requirements_txt = context.temp_dir.child("requirements.txt");
+    requirements_txt.write_str("anyio>=4")?;
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("-r")
+        .arg("requirements.txt")
+        .arg("--amend")
+        .arg("--upgrade-package")
+        .arg("anyio")
+        .arg("--strict"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Uninstalled 1 package in [TIME]
+    Installed 1 package in [TIME]
+     - anyio==3.7.1
+     + anyio==4.3.0
+    ");
+
+    Ok(())
+}
+
+/// `--override` should not bypass a saved `--amend` requirement: overrides replace a
+/// requirement, but saved history is checked as a separate constraint, which overrides can't
+/// touch. This is the same reason `--constraint` files already win over `--override`.
+#[test]
+fn amend_override_does_not_bypass_history() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    let requirements_txt = context.temp_dir.child("requirements.txt");
+    requirements_txt.write_str("anyio<4")?;
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("-r")
+        .arg("requirements.txt")
+        .arg("--amend")
+        .arg("--strict"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    Prepared 3 packages in [TIME]
+    Installed 3 packages in [TIME]
+     + anyio==3.7.1
+     + idna==3.6
+     + sniffio==1.3.1
+    ");
+
+    let requirements_txt = context.temp_dir.child("requirements.txt");
+    requirements_txt.write_str("anyio")?;
+
+    let overrides_txt = context.temp_dir.child("overrides.txt");
+    overrides_txt.write_str("anyio>=4")?;
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("-r")
+        .arg("requirements.txt")
+        .arg("--override")
+        .arg("overrides.txt")
+        .arg("--amend")
+        .arg("--strict"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+      × No solution found when resolving dependencies:
+      ╰─▶ Because you require anyio>=4 and anyio<4, we can conclude that your requirements are unsatisfiable.
+    ");
+
+    Ok(())
+}
+
+/// A plain install (no `--amend`) should still save the requirement, so it's ready for the
+/// next `--amend` install, but should not be enforced now.
+#[test]
+fn plain_install_writes_history_without_enforcing() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    let requirements_txt = context.temp_dir.child("requirements.txt");
+    requirements_txt.write_str("anyio<4")?;
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("-r")
+        .arg("requirements.txt")
+        .arg("--strict"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    Prepared 3 packages in [TIME]
+    Installed 3 packages in [TIME]
+     + anyio==3.7.1
+     + idna==3.6
+     + sniffio==1.3.1
+    ");
+
+    let requirements_txt = context.temp_dir.child("requirements.txt");
+    requirements_txt.write_str("anyio>=4")?;
+
+    // No `--amend`: this should succeed, even though it contradicts the prior invocation.
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("-r")
+        .arg("requirements.txt")
+        .arg("--strict"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Uninstalled 1 package in [TIME]
+    Installed 1 package in [TIME]
+     - anyio==3.7.1
+     + anyio==4.3.0
+    ");
+
+    // But the history should have been overwritten to reflect this invocation's requirement.
+    let history = context.venv.child("uv-requirements-history.toml");
+    history.assert(predicate::str::contains("anyio"));
+    history.assert(predicate::str::contains(">=4"));
+
+    Ok(())
+}
+
 #[test]
 fn exact_install_removes_extraneous_packages() -> Result<()> {
     let context = uv_test::test_context!("3.12").with_filtered_counts();

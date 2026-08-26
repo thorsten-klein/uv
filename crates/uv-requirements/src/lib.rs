@@ -1,4 +1,5 @@
 pub use crate::extras::*;
+pub use crate::history::*;
 pub use crate::lookahead::*;
 pub use crate::source_tree::*;
 pub use crate::sources::*;
@@ -12,6 +13,7 @@ pub use crate::upgrade::{
 use uv_distribution_types::{Dist, DistErrorKind, Requirement, RequirementSource};
 
 mod extras;
+mod history;
 mod lookahead;
 mod source_tree;
 mod sources;

@@ -1105,6 +1105,7 @@ async fn run_with_workspace_cache(
                 cache,
                 workspace_cache,
                 args.dry_run,
+                args.amend,
                 printer,
                 globals.preview,
             ))
